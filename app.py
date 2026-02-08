@@ -23,6 +23,7 @@ REDDIT_CLIENT_ID = os.getenv('REDDIT_CLIENT_ID', 'PH99oWZjM43GimMtYigFvA')
 REDDIT_CLIENT_SECRET = os.getenv('REDDIT_CLIENT_SECRET', '3tJsXQKEtFFYInxzLEDqRZ0s_w5z0g')
 
 # OpenAI client
+# OpenAI API key
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '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')
 
 print("Connecting to Reddit...")
@@ -34,8 +35,17 @@ reddit = praw.Reddit(
 )
 print("Reddit client ready")
 
-# Initialize OpenAI
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Lazy-load OpenAI client (don't initialize at module load time)
+client = None
+
+def get_openai_client():
+    """Lazy-load OpenAI client to avoid initialization errors."""
+    global client
+    if client is None:
+        print("Initializing OpenAI client...")
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        print("OpenAI client ready")
+    return client
 
 # Initialize VADER
 sia = SentimentIntensityAnalyzer()
@@ -153,7 +163,8 @@ TEXT:
 """.strip()
     
     try:
-        resp = client.chat.completions.create(
+        openai_client = get_openai_client()
+        resp = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": extraction_prompt}],
             temperature=0,
@@ -220,10 +231,11 @@ TEXT:
     # Generate individual crisis summaries
     print("Generating crisis summaries with OpenAI...")
     crisis_summaries = []
+    openai_client = get_openai_client()
     
     for _, row in df_entity_grouped.head(20).iterrows():
         try:
-            summary_resp = client.chat.completions.create(
+            summary_resp = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{
                     "role": "user",
@@ -275,7 +287,8 @@ TEXT:
     briefing = "\n\n".join(brief_blocks)
     
     try:
-        report_resp = client.chat.completions.create(
+        openai_client = get_openai_client()
+        report_resp = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{
                 "role": "user",
