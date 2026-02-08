@@ -153,14 +153,14 @@ TEXT:
 """.strip()
     
     try:
-        resp = client.responses.create(
-            model="gpt-4.1-mini",
-            input=extraction_prompt,
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": extraction_prompt}],
             temperature=0,
-            max_output_tokens=200
+            max_tokens=200
         )
         
-        raw = resp.output_text.replace("\n", " ")
+        raw = resp.choices[0].message.content.replace("\n", " ")
         raw = re.sub(r"\s*,\s*", ", ", raw)
         raw = re.sub(r"\s{2,}", " ", raw).strip(" ,")
         
@@ -223,18 +223,21 @@ TEXT:
     
     for _, row in df_entity_grouped.head(20).iterrows():
         try:
-            summary_resp = client.responses.create(
-                model="gpt-4.1-mini",
+            summary_resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Summarize the potential PR or reputational crisis in ONE sentence, "
+                        "based ONLY on the following headlines. Be concrete and neutral.\n\n"
+                        f"ENTITY: {row['entity']}\n"
+                        "HEADLINES:\n" + "\n".join(f"- {t}" for t in row['titles'][:6])
+                    )
+                }],
                 temperature=0,
-                max_output_tokens=60,
-                input=(
-                    "Summarize the potential PR or reputational crisis in ONE sentence, "
-                    "based ONLY on the following headlines. Be concrete and neutral.\n\n"
-                    f"ENTITY: {row['entity']}\n"
-                    "HEADLINES:\n" + "\n".join(f"- {t}" for t in row['titles'][:6])
-                )
+                max_tokens=60
             )
-            row['crisis_summary'] = summary_resp.output_text.strip()
+            row['crisis_summary'] = summary_resp.choices[0].message.content.strip()
             crisis_summaries.append(row['crisis_summary'])
         except Exception as e:
             print(f"Error generating summary for {row['entity']}: {e}")
@@ -272,24 +275,27 @@ TEXT:
     briefing = "\n\n".join(brief_blocks)
     
     try:
-        report_resp = client.responses.create(
-            model="gpt-4.1-mini",
+        report_resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "You are writing an internal monitoring brief for Sentivity.ai.\n"
+                    "Using ONLY the briefing pack below, write holistic bullet points on what to watch.\n"
+                    "Rules:\n"
+                    "- Output ONLY bullet points (each line begins with '- ').\n"
+                    "- Each bullet should mention the entity and key concern.\n"
+                    "- Combine closely-related items when they refer to the same narrative.\n"
+                    "- Be actionable: who/what, why it matters, and what to monitor next.\n"
+                    "- Do NOT invent facts beyond the evidence.\n\n"
+                    f"BRIEFING PACK:\n{briefing}"
+                )
+            }],
             temperature=0,
-            max_output_tokens=450,
-            input=(
-                "You are writing an internal monitoring brief for Sentivity.ai.\n"
-                "Using ONLY the briefing pack below, write holistic bullet points on what to watch.\n"
-                "Rules:\n"
-                "- Output ONLY bullet points (each line begins with '- ').\n"
-                "- Each bullet should mention the entity and key concern.\n"
-                "- Combine closely-related items when they refer to the same narrative.\n"
-                "- Be actionable: who/what, why it matters, and what to monitor next.\n"
-                "- Do NOT invent facts beyond the evidence.\n\n"
-                f"BRIEFING PACK:\n{briefing}"
-            )
+            max_tokens=450
         )
         
-        holistic_report = report_resp.output_text.strip()
+        holistic_report = report_resp.choices[0].message.content.strip()
     except Exception as e:
         print(f"Error generating holistic report: {e}")
         holistic_report = "Crisis monitoring report generation failed. Please review individual company summaries."
