@@ -15,16 +15,15 @@ from openai import OpenAI
 app = Flask(__name__)
 CORS(app)
 
-# Initialize NLTK
 nltk.download('vader_lexicon', quiet=True)
 
-# Reddit credentials
 REDDIT_CLIENT_ID = os.getenv('REDDIT_CLIENT_ID', 'PH99oWZjM43GimMtYigFvA')
 REDDIT_CLIENT_SECRET = os.getenv('REDDIT_CLIENT_SECRET', '3tJsXQKEtFFYInxzLEDqRZ0s_w5z0g')
 
-# OpenAI client
-# OpenAI API key
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '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')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
+if not OPENAI_API_KEY:
+    print("WARNING: OPENAI_API_KEY not set in environment variables")
 
 print("Connecting to Reddit...")
 reddit = praw.Reddit(
@@ -35,11 +34,9 @@ reddit = praw.Reddit(
 )
 print("Reddit client ready")
 
-# Lazy-load OpenAI client (don't initialize at module load time)
 client = None
 
 def get_openai_client():
-    """Lazy-load OpenAI client to avoid initialization errors."""
     global client
     if client is None:
         print("Initializing OpenAI client...")
@@ -47,30 +44,25 @@ def get_openai_client():
         print("OpenAI client ready")
     return client
 
-# Initialize VADER
 sia = SentimentIntensityAnalyzer()
 
-# Subreddits to monitor
 CRISIS_SUBREDDITS = [
     "news", "worldnews", "politics", "business",
     "technology", "PublicFreakout", "OutOfTheLoop"
 ]
 
 def reddit_influence(row) -> float:
-    """Standardized influence algorithm."""
     score = max(row.get("score", 0) or 0, 0)
     comments = max(row.get("num_comments", 0) or 0, 0)
     return np.log1p(score) + 0.5 * np.log1p(comments)
 
 def compute_negativity(text: str) -> float:
-    """Compute negativity using VADER."""
     if not isinstance(text, str) or not text.strip():
         return 0.0
     compound = sia.polarity_scores(text)["compound"]
     return max(0.0, -compound)
 
-def fetch_reddit_posts(subreddits: List[str], days: int = 7, limit: int = 100):
-    """Fetch recent Reddit posts from crisis-relevant subreddits."""
+def fetch_reddit_posts(subreddits: List[str], days: int = 7, limit: int = 150):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     all_posts = []
     
@@ -103,19 +95,15 @@ def fetch_reddit_posts(subreddits: List[str], days: int = 7, limit: int = 100):
     if df.empty:
         return df
     
-    # Deduplicate
     initial = len(df)
     df = df.drop_duplicates(subset=['title']).reset_index(drop=True)
     print(f"Collected {initial} posts, {len(df)} after dedup")
     
     return df
 
-def analyze_crisis(days: int = 7, limit: int = 100):
-    """Main crisis analysis function with OpenAI report generation."""
-    
+def analyze_crisis(days: int = 7, limit: int = 150):
     print("Starting crisis analysis...")
     
-    # Fetch posts
     df = fetch_reddit_posts(CRISIS_SUBREDDITS, days, limit)
     
     if df.empty:
@@ -123,16 +111,10 @@ def analyze_crisis(days: int = 7, limit: int = 100):
     
     print("Calculating scores...")
     
-    # Calculate influence
     df['influence'] = df.apply(reddit_influence, axis=1)
-    
-    # Calculate negativity
     df['negativity'] = df['title'].apply(compute_negativity)
-    
-    # Calculate negative impact score
     df['negative_impact_score'] = df['negativity'] * df['influence']
     
-    # Filter crisis signals
     df_crisis = df[
         (df['negative_impact_score'] >= 1) &
         (df['influence'] > 0)
@@ -146,7 +128,6 @@ def analyze_crisis(days: int = 7, limit: int = 100):
     
     print(f"Found {len(df_crisis)} crisis signals")
     
-    # Extract entities using OpenAI
     print("Extracting entities with OpenAI...")
     titles = df_crisis['title'].tolist()[:150]
     text_blob = "\n".join(f"- {t}" for t in titles)
@@ -194,14 +175,12 @@ TEXT:
             "crisis_report": "Analysis completed but no clear company/organization entities were identified in crisis."
         }
     
-    # Match entities to posts
     def match_entities(title):
         title_l = title.lower()
         return [e for e in entities if e.lower() in title_l]
     
     df_crisis['entities'] = df_crisis['title'].apply(match_entities)
     
-    # Explode and aggregate by entity
     df_exploded = (
         df_crisis
         .explode('entities')
@@ -228,7 +207,6 @@ TEXT:
         .reset_index(drop=True)
     )
     
-    # Generate individual crisis summaries
     print("Generating crisis summaries with OpenAI...")
     crisis_summaries = []
     openai_client = get_openai_client()
@@ -256,7 +234,6 @@ TEXT:
             row['crisis_summary'] = f"Facing criticism across {row['mentions']} mentions"
             crisis_summaries.append(row['crisis_summary'])
     
-    # Generate holistic report
     print("Generating holistic report...")
     df_pack = df_entity_grouped.head(20).copy()
     
@@ -266,7 +243,6 @@ TEXT:
         avg_imp = float(row['avg_negative_impact'])
         mentions = int(row['mentions'])
         
-        # Get top 3 URLs
         urls = row['urls'][:3] if isinstance(row['urls'], list) else []
         titles = row['titles'][:3] if isinstance(row['titles'], list) else []
         
@@ -313,7 +289,6 @@ TEXT:
         print(f"Error generating holistic report: {e}")
         holistic_report = "Crisis monitoring report generation failed. Please review individual company summaries."
     
-    # Prepare response
     companies_in_crisis = []
     for idx, row in df_entity_grouped.head(20).iterrows():
         companies_in_crisis.append({
@@ -363,7 +338,11 @@ def health():
 def analyze():
     try:
         days = int(request.args.get('days', 7))
-        limit = int(request.args.get('limit', 100))
+        limit = int(request.args.get('limit', 150))
+        
+        if limit < 100:
+            limit = 100
+            print(f"Limit increased to minimum: 100")
         
         print(f"Starting crisis analysis (days={days}, limit={limit})")
         
